@@ -1,6 +1,6 @@
 task: detect
 mode: train
-model: yolov8n.pt
+model: runs/detect/train_v8n/weights/last.pt
 data: data/data.yaml
 epochs: 50
 time: null
@@ -11,7 +11,7 @@ save: true
 save_period: -1
 cache: false
 device: null
-workers: 0
+workers: 8
 project: runs/detect
 name: train_v8n
 exist_ok: true
@@ -103,4 +103,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: F:\Project\Insect pest detection\runs\detect\train_v8n
+save_dir: C:\Users\胡安康\Desktop\InsectPestDetection\runs\detect\train_v8n

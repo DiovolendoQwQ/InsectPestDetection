@@ -37,11 +37,13 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
   BugReport as BugIcon,
-  Terminal as TerminalIcon
+  Terminal as TerminalIcon,
+  Restore as RestoreIcon
 } from '@mui/icons-material';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
+import Testing from './components/Testing/Testing';
 
 const drawerWidth = 260;
 
@@ -128,9 +130,17 @@ function App() {
     return () => clearInterval(interval);
   }, [activeTab]);
 
-  useEffect(() => {
-    if (activeTab === 'training' && terminalRef.current && !xtermRef.current) {
-      xtermRef.current = new Terminal({
+  // Terminal Component
+  const TerminalView = ({ onInit }) => {
+    const termRef = useRef(null);
+    const xtermInstance = useRef(null);
+    const fitAddonInstance = useRef(null);
+
+    useEffect(() => {
+      if (!termRef.current) return;
+
+      // Initialize xterm
+      xtermInstance.current = new Terminal({
         rows: 24,
         cols: 80,
         theme: { 
@@ -141,46 +151,91 @@ function App() {
         fontFamily: '"Fira Code", monospace',
         fontSize: 14
       });
-      fitAddonRef.current = new FitAddon();
-      xtermRef.current.loadAddon(fitAddonRef.current);
-      xtermRef.current.open(terminalRef.current);
-      fitAddonRef.current.fit();
       
-      // Resize listener
-      const handleResize = () => fitAddonRef.current?.fit();
+      fitAddonInstance.current = new FitAddon();
+      xtermInstance.current.loadAddon(fitAddonInstance.current);
+      xtermInstance.current.open(termRef.current);
+      
+      // Fit immediately and after a short delay to ensure container is ready
+      fitAddonInstance.current.fit();
+      setTimeout(() => fitAddonInstance.current?.fit(), 100);
+
+      // Pass instances back to parent
+      if (onInit) {
+        onInit(xtermInstance.current, fitAddonInstance.current);
+      }
+      
+      const handleResize = () => fitAddonInstance.current?.fit();
       window.addEventListener('resize', handleResize);
-      
-      window.electronAPI.onTrainingLog((log) => {
-          xtermRef.current.write(log.replace(/\n/g, '\r\n'));
-       });
 
-       window.electronAPI.onTrainingFinished((code) => {
+      return () => {
+        window.removeEventListener('resize', handleResize);
+        xtermInstance.current?.dispose();
+      };
+    }, []);
+
+    return <div ref={termRef} style={{ width: '100%', height: '100%' }} />;
+  };
+
+  useEffect(() => {
+    // Listener for logs is global, but we only write if xterm is ready
+    const logHandler = (log) => {
+        if (xtermRef.current) {
+             xtermRef.current.write(log.replace(/\n/g, '\r\n'));
+        }
+    };
+
+    const finishHandler = (code) => {
          setIsTraining(false);
-         if (code === 0) {
-             xtermRef.current?.writeln('\x1b[32m\r\n>>> Training Completed Successfully!\x1b[0m');
-         } else {
-             xtermRef.current?.writeln(`\x1b[31m\r\n>>> Training Failed with exit code ${code}. Check logs above.\x1b[0m`);
+         if (xtermRef.current) {
+            if (code === 0) {
+                xtermRef.current.writeln('\x1b[32m\r\n>>> Training Completed Successfully!\x1b[0m');
+            } else {
+                xtermRef.current.writeln(`\x1b[31m\r\n>>> Training Failed with exit code ${code}. Check logs above.\x1b[0m`);
+            }
          }
-      });
+    };
 
-      return () => window.removeEventListener('resize', handleResize);
-    }
-    // Re-fit on tab change
-    if (activeTab === 'training' && xtermRef.current) {
-        setTimeout(() => fitAddonRef.current?.fit(), 100);
-    }
-  }, [activeTab]);
+    const removeLogListener = window.electronAPI.onTrainingLog(logHandler);
+    const removeFinishListener = window.electronAPI.onTrainingFinished(finishHandler);
+    
+    return () => {
+        // Cleanup listeners if needed, though Electron API usually handles this well
+        // removeLogListener(); 
+        // removeFinishListener();
+    };
+  }, []);
+
+  const handleTerminalInit = (terminal, fitAddon) => {
+      xtermRef.current = terminal;
+      fitAddonRef.current = fitAddon;
+  };
 
   const startTraining = () => {
     setIsTraining(true);
     xtermRef.current?.clear();
     xtermRef.current?.writeln('\x1b[36m>>> Initializing Training Session...\x1b[0m');
     
-    // We need to point to the correct python executable in the conda env
-    const pythonPath = 'D:\\Anaconda\\envs\\yolov8_env\\python.exe'; // USER ADJUST THIS
+    // Path will be handled by the backend (main.js) via .env or system environment
+    const pythonPath = null; 
     
     // Since we set cwd to project root in main.js, the script path is relative to root
     const scriptPath = 'src/train.py'; 
+    
+    window.electronAPI.startTraining({
+      pythonPath,
+      scriptPath, 
+      params: { epochs }
+    });
+  };
+
+  const resumeTraining = () => {
+    setIsTraining(true);
+    xtermRef.current?.clear();
+    xtermRef.current?.writeln('\x1b[36m>>> Resuming Training Session...\x1b[0m');
+    
+    const pythonPath = null; 
+    const scriptPath = 'src/resume_train.py'; 
     
     window.electronAPI.startTraining({
       pythonPath,
@@ -413,18 +468,38 @@ function App() {
                         <Divider sx={{ my: 2 }} />
                         
                         {!isTraining ? (
-                          <Button 
-                            variant="contained" 
-                            size="large"
-                            startIcon={<PlayIcon />}
-                            onClick={startTraining}
-                            sx={{ 
-                              background: 'linear-gradient(60deg, #26c6da, #00acc1)',
-                              boxShadow: '0 4px 20px 0 rgba(0, 188, 212, 0.14)'
-                            }}
-                          >
-                            Start Training
-                          </Button>
+                          <>
+                            <Button 
+                              variant="contained" 
+                              size="large"
+                              startIcon={<PlayIcon />}
+                              onClick={startTraining}
+                              sx={{ 
+                                background: 'linear-gradient(60deg, #26c6da, #00acc1)',
+                                boxShadow: '0 4px 20px 0 rgba(0, 188, 212, 0.14)'
+                              }}
+                            >
+                              Start Training
+                            </Button>
+                            
+                            <Button 
+                              variant="outlined" 
+                              size="large"
+                              startIcon={<RestoreIcon />}
+                              onClick={resumeTraining}
+                              sx={{ 
+                                borderColor: 'rgba(255,255,255,0.3)',
+                                color: 'rgba(255,255,255,0.7)',
+                                '&:hover': {
+                                  borderColor: '#00bcd4',
+                                  color: '#00bcd4',
+                                  background: 'rgba(0, 188, 212, 0.05)'
+                                }
+                              }}
+                            >
+                              Resume Training
+                            </Button>
+                          </>
                         ) : (
                           <Button 
                             variant="contained" 
@@ -451,22 +526,22 @@ function App() {
                       </Typography>
                     </Box>
                     <Box sx={{ flex: 1, p: 1, overflow: 'hidden', position: 'relative' }}>
-                      <div 
-                        ref={terminalRef} 
-                        style={{ width: '100%', height: '100%' }} 
-                      />
+                      <TerminalView onInit={handleTerminalInit} />
                     </Box>
                   </Card>
                 </Grid>
               </Grid>
             </Box>
           )}
+
+          {/* TESTING */}
+          {activeTab === 'testing' && <Testing />}
           
           {/* PLACEHOLDERS */}
-          {(activeTab === 'testing' || activeTab === 'settings') && (
+          {activeTab === 'settings' && (
              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mt: 10, opacity: 0.5 }}>
-               <BugIcon sx={{ fontSize: 60, mb: 2 }} />
-               <Typography variant="h5">Module Under Construction</Typography>
+               <SettingsIcon sx={{ fontSize: 60, mb: 2 }} />
+               <Typography variant="h5">Settings Module</Typography>
                <Typography>This feature will be available in the next update.</Typography>
              </Box>
           )}

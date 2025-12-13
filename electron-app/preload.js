@@ -8,4 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTrainingLog: (callback) => ipcRenderer.on('training-log', (event, value) => callback(value)),
   onTrainingFinished: (callback) => ipcRenderer.on('training-finished', (event, code) => callback(code)),
   removeLogListener: () => ipcRenderer.removeAllListeners('training-log'),
+  // Testing / Inference API
+  openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
+  runInference: (path) => ipcRenderer.invoke('run:inference', path)
 });
