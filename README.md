@@ -78,6 +78,30 @@ python scripts/generate_report.py
 python scripts/check_yolo_dataset.py --data data/data.yaml
 ```
 
+## 🖥️ 桌面应用 (GUI)
+
+本项目提供了一个基于 Electron 的可视化桌面应用，方便进行模型训练和监控。
+
+### 启动方法
+
+1.  进入应用目录：
+    ```bash
+    cd electron-app
+    ```
+2.  安装依赖 (仅需一次)：
+    ```bash
+    npm install
+    ```
+3.  启动应用：
+    ```bash
+    npm run dev
+    ```
+
+**功能亮点：**
+*   **实时监控**：查看 CPU、内存和 GPU 使用率。
+*   **可视化训练**：一键配置 Epochs 等参数，实时查看训练日志。
+*   **深色模式**：专业的科技感界面设计。
+
 ## ❓ 常见问题解答 (FAQ)
 
 **Q: 训练时提示 "CUDA not available" 怎么办？**
@@ -93,8 +117,8 @@ A: 所有的训练记录、模型权重文件（`.pt`）和图表都保存在 `r
 
 如果你在使用过程中遇到任何问题，或者有好的建议，欢迎联系我！
 
-*   **邮箱**: your_email@example.com
-*   **GitHub**: [你的GitHub主页链接]
+*   **邮箱**: diovolendoxch@gmail.com
+*   **GitHub**: [[DiovolendoQwQ](https://github.com/DiovolendoQwQ)]
 
 ---
 *这就去试试吧，祝你捉虫愉快！* 🌾🐞

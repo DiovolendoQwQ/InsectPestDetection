@@ -1,10 +1,11 @@
 import os
+
+# Fix for OMP error on Windows
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 from ultralytics import YOLO
 
-def train():
-    # Load model
+def train():# Load model
     model = YOLO('yolov8n.pt')  # load a pretrained model (recommended for training)
 
     # Train the model
