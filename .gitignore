@@ -4,14 +4,14 @@ __pycache__/
 *$py.class
 
 # Training artifacts
-runs/
-*.pt
-*.onnx
+# runs/
+# *.pt
+# *.onnx
 
 # Dataset
-images/
-labels/
-*.cache
+# images/
+# labels/
+# *.cache
 
 # Reports
 *.png
