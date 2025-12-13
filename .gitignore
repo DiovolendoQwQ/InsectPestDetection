@@ -14,7 +14,7 @@ __pycache__/
 # *.cache
 
 # Reports
-*.png
+# *.png
 dataset_quality_report.txt
 final_report.md
 
