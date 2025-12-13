@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Training artifacts
+runs/
+*.pt
+*.onnx
+
+# Dataset
+images/
+labels/
+*.cache
+
+# Reports
+*.png
+dataset_quality_report.txt
+final_report.md
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
