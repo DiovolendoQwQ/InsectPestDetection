@@ -10,5 +10,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeLogListener: () => ipcRenderer.removeAllListeners('training-log'),
   // Testing / Inference API
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
-  runInference: (path) => ipcRenderer.invoke('run:inference', path)
+  openVideoDialog: () => ipcRenderer.invoke('dialog:openVideo'),
+  runInference: (path) => ipcRenderer.invoke('run:inference', path),
+  onInferenceProgress: (callback) => ipcRenderer.on('inference-progress', (event, progress) => callback(progress)),
+  onInferenceStream: (callback) => ipcRenderer.on('inference-stream', (event, frame) => callback(frame)),
+  onInferenceData: (callback) => ipcRenderer.on('inference-data', (event, data) => callback(data)),
+  removeProgressListeners: () => {
+      ipcRenderer.removeAllListeners('inference-progress');
+      ipcRenderer.removeAllListeners('inference-stream');
+      ipcRenderer.removeAllListeners('inference-data');
+  }
 });

@@ -4,6 +4,9 @@ const { spawn } = require('child_process');
 const si = require('systeminformation');
 require('dotenv').config();
 
+// Suppress security warnings in development
+process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
+
 let mainWindow;
 
 function createWindow() {
@@ -16,6 +19,7 @@ function createWindow() {
       nodeIntegration: true,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      webSecurity: process.env.NODE_ENV !== 'development', // Disable webSecurity in dev to load local files
     },
   });
 
@@ -180,7 +184,21 @@ ipcMain.handle('dialog:openFile', async () => {
   }
 });
 
-ipcMain.handle('run:inference', async (event, imagePath) => {
+ipcMain.handle('dialog:openVideo', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [
+      { name: 'Videos', extensions: ['mp4', 'avi', 'mov', 'mkv', 'webm'] }
+    ]
+  });
+  if (canceled) {
+    return null;
+  } else {
+    return filePaths[0];
+  }
+});
+
+ipcMain.handle('run:inference', async (event, filePath) => {
   return new Promise((resolve, reject) => {
     let pythonPath = process.env.PYTHON_PATH || 'python';
     // If fallback logic is needed, check default paths or 'python'
@@ -190,9 +208,9 @@ ipcMain.handle('run:inference', async (event, imagePath) => {
     const projectRoot = path.resolve(__dirname, '..');
     
     // Command args
-    const args = [scriptPath, '--source', imagePath];
+    const args = [scriptPath, '--source', filePath];
 
-    console.log(`Starting inference on: ${imagePath}`);
+    console.log(`Starting inference on: ${filePath}`);
 
     const child = spawn(pythonPath, args, {
       cwd: projectRoot,
@@ -202,13 +220,54 @@ ipcMain.handle('run:inference', async (event, imagePath) => {
     let stdoutData = '';
     let stderrData = '';
 
+    let stdoutBuffer = '';
+
     child.stdout.on('data', (data) => {
-      stdoutData += data.toString();
+      const chunk = data.toString();
+      stdoutBuffer += chunk;
+      
+      // Process buffered lines
+      let newlineIndex;
+      while ((newlineIndex = stdoutBuffer.indexOf('\n')) !== -1) {
+          const line = stdoutBuffer.slice(0, newlineIndex).trim();
+          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+          
+          if (line.startsWith('STREAM_FRAME:')) {
+              const base64Data = line.substring('STREAM_FRAME:'.length);
+              event.sender.send('inference-stream', `data:image/jpeg;base64,${base64Data}`);
+          } else if (line.startsWith('STREAM_DATA:')) {
+              try {
+                  const jsonData = JSON.parse(line.substring('STREAM_DATA:'.length));
+                  event.sender.send('inference-data', jsonData);
+              } catch (e) {
+                  console.error('Failed to parse STREAM_DATA:', e);
+              }
+          } else if (line.startsWith('__JSON_START__')) {
+              // Start of JSON result
+          } else if (line.startsWith('__JSON_END__')) {
+              // End of JSON result
+          } else if (line.startsWith('{') || line.startsWith('}')) {
+              // JSON content, accumulate for final result parsing if needed
+              // But we are parsing the whole stdoutBuffer at the end in current logic.
+              // Actually, the current logic below parses `stdoutData` which accumulates everything.
+              // So we just need to ensure we don't block the stream.
+          }
+      }
+      
+      stdoutData += chunk;
     });
 
     child.stderr.on('data', (data) => {
-      stderrData += data.toString();
-      console.log(`Inference Stderr: ${data}`);
+      const output = data.toString();
+      stderrData += output;
+      console.log(`Inference Stderr: ${output}`);
+      
+      // Check for progress
+      const match = output.match(/PROGRESS:(\d+)/);
+      if (match) {
+        const progress = parseInt(match[1]);
+        event.sender.send('inference-progress', progress);
+      }
     });
 
     child.on('close', (code) => {

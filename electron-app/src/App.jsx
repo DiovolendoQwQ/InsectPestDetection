@@ -24,7 +24,10 @@ import {
   createTheme,
   Avatar,
   Stack,
-  Chip
+  Chip,
+  IconButton,
+  useMediaQuery,
+  useTheme
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -38,7 +41,8 @@ import {
   Stop as StopIcon,
   BugReport as BugIcon,
   Terminal as TerminalIcon,
-  Restore as RestoreIcon
+  Restore as RestoreIcon,
+  Menu as MenuIcon
 } from '@mui/icons-material';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
@@ -92,6 +96,9 @@ const darkTheme = createTheme({
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
+
   const [stats, setStats] = useState({
     cpuLoad: 0,
     memUsed: 0,
@@ -130,15 +137,17 @@ function App() {
     return () => clearInterval(interval);
   }, [activeTab]);
 
-  // Terminal Component
-  const TerminalView = ({ onInit }) => {
+  // Terminal Component defined outside App to prevent re-creation
+  const TerminalView = ({ onInit, onDispose }) => {
     const termRef = useRef(null);
     const xtermInstance = useRef(null);
     const fitAddonInstance = useRef(null);
-
+    const resizeTimeoutRef = useRef(null);
+    const fitRafRef = useRef(null);
+  
     useEffect(() => {
       if (!termRef.current) return;
-
+  
       // Initialize xterm
       xtermInstance.current = new Terminal({
         rows: 24,
@@ -149,39 +158,79 @@ function App() {
           cursor: '#00bcd4'
         },
         fontFamily: '"Fira Code", monospace',
-        fontSize: 14
+        fontSize: 14,
+        allowProposedApi: true
       });
       
       fitAddonInstance.current = new FitAddon();
       xtermInstance.current.loadAddon(fitAddonInstance.current);
       xtermInstance.current.open(termRef.current);
       
-      // Fit immediately and after a short delay to ensure container is ready
-      fitAddonInstance.current.fit();
-      setTimeout(() => fitAddonInstance.current?.fit(), 100);
-
+      const fit = () => {
+        // xtermInstance.current.element ensures terminal is actually mounted in DOM
+        if (!xtermInstance.current || !xtermInstance.current.element || !fitAddonInstance.current) return;
+        
+        try {
+            // Only fit if dimensions are valid
+            if (termRef.current && termRef.current.clientWidth > 0 && termRef.current.clientHeight > 0) {
+                fitAddonInstance.current.fit();
+            }
+        } catch (e) {
+            // Ignore errors during resize/fit
+        }
+      };
+      
+      // Initial fit
+      fitRafRef.current = requestAnimationFrame(() => fit());
+      // Backup fit
+      resizeTimeoutRef.current = setTimeout(() => fit(), 100);
+  
       // Pass instances back to parent
       if (onInit) {
         onInit(xtermInstance.current, fitAddonInstance.current);
       }
       
-      const handleResize = () => fitAddonInstance.current?.fit();
+      const handleResize = () => {
+          if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current);
+          fitRafRef.current = requestAnimationFrame(() => fit());
+      };
       window.addEventListener('resize', handleResize);
-
+  
       return () => {
         window.removeEventListener('resize', handleResize);
-        xtermInstance.current?.dispose();
+        if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+        if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current);
+        
+        // Notify parent about disposal
+        if (onDispose) onDispose();
+  
+        // Dispose xterm
+        try {
+          xtermInstance.current?.dispose();
+        } catch(e) {
+          // Ignore dispose errors
+        }
+        xtermInstance.current = null;
+        fitAddonInstance.current = null;
       };
     }, []);
-
+  
     return <div ref={termRef} style={{ width: '100%', height: '100%' }} />;
   };
 
   useEffect(() => {
     // Listener for logs is global, but we only write if xterm is ready
     const logHandler = (log) => {
+        // Double check if xtermRef is valid and not disposed (though we can't easily check isDisposed)
+        // If the ref is null (cleared by onDispose), we skip.
         if (xtermRef.current) {
-             xtermRef.current.write(log.replace(/\n/g, '\r\n'));
+             try {
+                xtermRef.current.write(log.replace(/\n/g, '\r\n'));
+             } catch (e) {
+                 // If write fails, it might be disposed. Clear the ref.
+                 console.warn("Write to xterm failed:", e);
+                 xtermRef.current = null;
+             }
         }
     };
 
@@ -209,6 +258,11 @@ function App() {
   const handleTerminalInit = (terminal, fitAddon) => {
       xtermRef.current = terminal;
       fitAddonRef.current = fitAddon;
+  };
+
+  const handleTerminalDispose = () => {
+      xtermRef.current = null;
+      fitAddonRef.current = null;
   };
 
   const startTraining = () => {
@@ -298,15 +352,95 @@ function App() {
     </Card>
   );
 
+  const drawerContent = (
+    <>
+      <Box sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
+        <Avatar sx={{ bgcolor: 'primary.main', width: 40, height: 40 }}>
+          <BugIcon />
+        </Avatar>
+        <Box>
+          <Typography variant="subtitle1" fontWeight="bold">Pest Detect AI</Typography>
+          <Typography variant="caption" color="textSecondary">v1.0.0 Pro</Typography>
+        </Box>
+      </Box>
+      <Divider sx={{ borderColor: 'rgba(255,255,255,0.05)' }} />
+      <Box sx={{ overflow: 'auto', mt: 2 }}>
+        <List>
+          {['Dashboard', 'Training', 'Testing', 'Settings'].map((text, index) => {
+            const isActive = activeTab === text.toLowerCase();
+            const icons = [<DashboardIcon />, <TrainingIcon />, <TestingIcon />, <SettingsIcon />];
+            
+            return (
+              <ListItem key={text} disablePadding sx={{ mb: 1, px: 2 }}>
+                <ListItemButton 
+                  onClick={() => {
+                    setActiveTab(text.toLowerCase());
+                    setMobileOpen(false);
+                  }} 
+                  selected={isActive}
+                  sx={{
+                    borderRadius: 2,
+                    '&.Mui-selected': {
+                      bgcolor: 'rgba(0, 188, 212, 0.15)',
+                      '&:hover': { bgcolor: 'rgba(0, 188, 212, 0.25)' },
+                      borderLeft: '4px solid #00bcd4'
+                    }
+                  }}
+                >
+                  <ListItemIcon sx={{ color: isActive ? 'primary.main' : 'inherit' }}>
+                    {icons[index]}
+                  </ListItemIcon>
+                  <ListItemText 
+                    primary={text} 
+                    primaryTypographyProps={{ 
+                      fontWeight: isActive ? 600 : 400,
+                      color: isActive ? 'primary.main' : 'inherit'
+                    }} 
+                  />
+                </ListItemButton>
+              </ListItem>
+            );
+          })}
+        </List>
+      </Box>
+    </>
+  );
+
   return (
     <ThemeProvider theme={darkTheme}>
       <Box sx={{ display: 'flex', bgcolor: 'background.default', minHeight: '100vh' }}>
         <CssBaseline />
         
-        {/* Sidebar */}
+        {/* Mobile Toggle Button */}
+        <IconButton
+            color="inherit"
+            aria-label="open drawer"
+            edge="start"
+            onClick={handleDrawerToggle}
+            sx={{ mr: 2, display: { md: 'none' }, position: 'fixed', top: 16, left: 16, zIndex: 1200 }}
+        >
+            <MenuIcon />
+        </IconButton>
+
+        {/* Sidebar - Mobile */}
+        <Drawer
+          variant="temporary"
+          open={mobileOpen}
+          onClose={handleDrawerToggle}
+          ModalProps={{ keepMounted: true }}
+          sx={{
+            display: { xs: 'block', md: 'none' },
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+          }}
+        >
+          {drawerContent}
+        </Drawer>
+
+        {/* Sidebar - Desktop */}
         <Drawer
           variant="permanent"
           sx={{
+            display: { xs: 'none', md: 'block' },
             width: drawerWidth,
             flexShrink: 0,
             [`& .MuiDrawer-paper`]: { 
@@ -315,53 +449,9 @@ function App() {
               borderRight: '1px solid rgba(255,255,255,0.05)'
             },
           }}
+          open
         >
-          <Box sx={{ p: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'primary.main', width: 40, height: 40 }}>
-              <BugIcon />
-            </Avatar>
-            <Box>
-              <Typography variant="subtitle1" fontWeight="bold">Pest Detect AI</Typography>
-              <Typography variant="caption" color="textSecondary">v1.0.0 Pro</Typography>
-            </Box>
-          </Box>
-          <Divider sx={{ borderColor: 'rgba(255,255,255,0.05)' }} />
-          <Box sx={{ overflow: 'auto', mt: 2 }}>
-            <List>
-              {['Dashboard', 'Training', 'Testing', 'Settings'].map((text, index) => {
-                const isActive = activeTab === text.toLowerCase();
-                const icons = [<DashboardIcon />, <TrainingIcon />, <TestingIcon />, <SettingsIcon />];
-                
-                return (
-                  <ListItem key={text} disablePadding sx={{ mb: 1, px: 2 }}>
-                    <ListItemButton 
-                      onClick={() => setActiveTab(text.toLowerCase())} 
-                      selected={isActive}
-                      sx={{
-                        borderRadius: 2,
-                        '&.Mui-selected': {
-                          bgcolor: 'rgba(0, 188, 212, 0.15)',
-                          '&:hover': { bgcolor: 'rgba(0, 188, 212, 0.25)' },
-                          borderLeft: '4px solid #00bcd4'
-                        }
-                      }}
-                    >
-                      <ListItemIcon sx={{ color: isActive ? 'primary.main' : 'inherit' }}>
-                        {icons[index]}
-                      </ListItemIcon>
-                      <ListItemText 
-                        primary={text} 
-                        primaryTypographyProps={{ 
-                          fontWeight: isActive ? 600 : 400,
-                          color: isActive ? 'primary.main' : 'inherit'
-                        }} 
-                      />
-                    </ListItemButton>
-                  </ListItem>
-                );
-              })}
-            </List>
-          </Box>
+          {drawerContent}
         </Drawer>
 
         {/* Main Content */}
@@ -374,7 +464,7 @@ function App() {
                 System Overview
               </Typography>
               <Grid container spacing={4}>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <StatCard 
                     title="CPU Usage"
                     value={stats ? `${stats.cpuLoad.toFixed(1)}%` : '...'}
@@ -384,7 +474,7 @@ function App() {
                     icon={<MemoryIcon sx={{ color: '#fff' }} />}
                   />
                 </Grid>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }}>
                   <StatCard 
                     title="Memory Usage"
                     value={stats ? `${(stats.memUsed / 1024 / 1024 / 1024).toFixed(1)} GB` : '...'}
@@ -394,7 +484,7 @@ function App() {
                     icon={<StorageIcon sx={{ color: '#fff' }} />}
                   />
                 </Grid>
-                <Grid item xs={12} md={4}>
+                <Grid size={{ xs: 12, sm: 12, md: 4 }}>
                   <StatCard 
                     title="GPU Status"
                     value={stats && stats.gpu ? "Active" : "N/A"}
@@ -406,8 +496,15 @@ function App() {
                 </Grid>
                 
                 {/* Placeholder for Charts */}
-                <Grid item xs={12}>
-                  <Card sx={{ p: 3, height: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'rgba(255,255,255,0.02)' }}>
+                <Grid size={{ xs: 12 }}>
+                  <Card sx={{ 
+                    p: 3, 
+                    height: { xs: 300, md: 400, lg: 500 }, 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    bgcolor: 'rgba(255,255,255,0.02)' 
+                  }}>
                     <Typography color="textSecondary">Real-time Performance Charts (Coming Soon)</Typography>
                   </Card>
                 </Grid>
@@ -435,7 +532,7 @@ function App() {
               
               <Grid container spacing={3}>
                 {/* Configuration Panel */}
-                <Grid item xs={12} md={3}>
+                <Grid size={{ xs: 12, md: 3 }}>
                   <Card sx={{ height: '100%' }}>
                     <CardContent sx={{ p: 3 }}>
                       <Typography variant="h6" gutterBottom sx={{ mb: 3 }}>
@@ -517,8 +614,13 @@ function App() {
                 </Grid>
 
                 {/* Logs Panel */}
-                <Grid item xs={12} md={9}>
-                  <Card sx={{ height: '600px', display: 'flex', flexDirection: 'column', bgcolor: '#151515' }}>
+                <Grid size={{ xs: 12, md: 9 }}>
+                  <Card sx={{ 
+                    height: { xs: '400px', md: '600px', lg: '700px' }, 
+                    display: 'flex', 
+                    flexDirection: 'column', 
+                    bgcolor: '#151515' 
+                  }}>
                     <Box sx={{ p: 1.5, borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 1 }}>
                       <TerminalIcon fontSize="small" sx={{ color: 'text.secondary' }} />
                       <Typography variant="caption" color="textSecondary" fontFamily="monospace">
@@ -526,7 +628,7 @@ function App() {
                       </Typography>
                     </Box>
                     <Box sx={{ flex: 1, p: 1, overflow: 'hidden', position: 'relative' }}>
-                      <TerminalView onInit={handleTerminalInit} />
+                      <TerminalView onInit={handleTerminalInit} onDispose={handleTerminalDispose} />
                     </Box>
                   </Card>
                 </Grid>
