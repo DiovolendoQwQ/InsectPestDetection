@@ -16,7 +16,16 @@ import {
   Stack,
   Divider,
   Chip,
-  CircularProgress
+  CircularProgress,
+  Slider,
+  ToggleButton,
+  ToggleButtonGroup,
+  FormControlLabel,
+  Switch,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem
 } from '@mui/material';
 import {
   Image as ImageIcon,
@@ -28,7 +37,8 @@ import {
   AccessTime as TimeIcon,
   Tag as CountIcon,
   Category as ClassIcon,
-  MyLocation as CoordsIcon
+  MyLocation as CoordsIcon,
+  Settings as SettingsIcon
 } from '@mui/icons-material';
 
 const Testing = () => {
@@ -39,8 +49,217 @@ const Testing = () => {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [framesData, setFramesData] = useState([]);
+  const [fps, setFps] = useState(1);
+  const [useNativeFps, setUseNativeFps] = useState(false);
+  const [quality, setQuality] = useState('medium');
+  const [modelList, setModelList] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
   const videoRef = React.useRef(null);
   const canvasRef = React.useRef(null);
+  const requestRef = React.useRef();
+  const isRunningRef = React.useRef(false);
+
+  // Helper to process frames data for smooth tracking
+  // We want to create "tracks" where objects persist across frames
+  // This is a simple greedy linker
+  const processTracks = (rawFrames) => {
+      // rawFrames is sorted by time
+      if (!rawFrames || rawFrames.length === 0) return [];
+
+      // Add IDs to detections for interpolation
+      let nextId = 0;
+      const frames = JSON.parse(JSON.stringify(rawFrames)); // Deep copy
+
+      for (let i = 0; i < frames.length - 1; i++) {
+          const currFrame = frames[i];
+          const nextFrame = frames[i+1];
+          
+          if (!currFrame.detections) continue;
+
+          currFrame.detections.forEach(det => {
+              if (!det.id) det.id = nextId++;
+          });
+
+          if (!nextFrame.detections) continue;
+
+          // Link to next frame
+          // Simple IoU or distance matching
+          currFrame.detections.forEach(currDet => {
+              let bestMatch = null;
+              let minDist = 100000;
+
+              // Find closest in next frame of same class
+              nextFrame.detections.forEach(nextDet => {
+                  if (nextDet.class_name !== currDet.class_name) return;
+                  if (nextDet.matched) return; // Already matched
+
+                  // Center distance
+                  const cx1 = (currDet.bbox[0] + currDet.bbox[2])/2;
+                  const cy1 = (currDet.bbox[1] + currDet.bbox[3])/2;
+                  const cx2 = (nextDet.bbox[0] + nextDet.bbox[2])/2;
+                  const cy2 = (nextDet.bbox[1] + nextDet.bbox[3])/2;
+                  
+                  const dist = Math.sqrt(Math.pow(cx2-cx1, 2) + Math.pow(cy2-cy1, 2));
+                  
+                  // Threshold (e.g. 100px movement allowed)
+                  if (dist < 200 && dist < minDist) {
+                      minDist = dist;
+                      bestMatch = nextDet;
+                  }
+              });
+
+              if (bestMatch) {
+                  bestMatch.id = currDet.id; // Propagate ID
+                  bestMatch.matched = true;
+              }
+          });
+          
+          // Reset matched flag for next iteration logic (actually not needed if we iterate forward)
+      }
+      
+      // Ensure last frame has IDs
+      const lastFrame = frames[frames.length - 1];
+      if (lastFrame && lastFrame.detections) {
+          lastFrame.detections.forEach(det => {
+              if (!det.id) det.id = nextId++;
+          });
+      }
+
+      return frames;
+  };
+
+  // Rendering Loop
+  const animate = () => {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      
+      if (video && canvas && !video.paused && !video.ended && framesData.length > 0) {
+          drawFrame();
+      }
+      requestRef.current = requestAnimationFrame(animate);
+  };
+
+  React.useEffect(() => {
+      requestRef.current = requestAnimationFrame(animate);
+      return () => cancelAnimationFrame(requestRef.current);
+  }, [framesData, isVideo]); // Re-bind when data changes
+
+  const drawFrame = () => {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      // Match canvas size
+      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
+          canvas.width = video.clientWidth;
+          canvas.height = video.clientHeight;
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      const currentTime = video.currentTime;
+      
+      // Find surrounding frames
+      // framesData is sorted
+      let prevFrame = null;
+      let nextFrame = null;
+      
+      // Binary search or findIndex
+      // Optimization: remember last index? For now, find is okay for small arrays (<1000)
+      for (let i = 0; i < framesData.length; i++) {
+          if (framesData[i].time > currentTime) {
+              nextFrame = framesData[i];
+              prevFrame = framesData[i-1];
+              break;
+          }
+      }
+      
+      if (!nextFrame && framesData.length > 0) {
+          // End of video or past last detection
+          prevFrame = framesData[framesData.length - 1];
+      }
+      
+      // Scale factors
+      const scaleX = canvas.width / video.videoWidth;
+      const scaleY = canvas.height / video.videoHeight;
+
+      // Draw Logic
+      if (prevFrame && nextFrame && prevFrame.detections && nextFrame.detections) {
+          // Interpolation Mode
+          const timeRatio = (currentTime - prevFrame.time) / (nextFrame.time - prevFrame.time);
+          
+          // Draw prevFrame detections, interpolating to nextFrame if ID matches
+          prevFrame.detections.forEach(det => {
+              let x1 = det.bbox[0];
+              let y1 = det.bbox[1];
+              let x2 = det.bbox[2];
+              let y2 = det.bbox[3];
+              let opacity = 1.0;
+              
+              // Find match in nextFrame
+              const match = nextFrame.detections.find(d => d.id === det.id);
+              
+              if (match) {
+                  // Lerp
+                  x1 = x1 + (match.bbox[0] - x1) * timeRatio;
+                  y1 = y1 + (match.bbox[1] - y1) * timeRatio;
+                  x2 = x2 + (match.bbox[2] - x2) * timeRatio;
+                  y2 = y2 + (match.bbox[3] - y2) * timeRatio;
+              } else {
+                  // Fade out if no match
+                  opacity = 1.0 - timeRatio;
+              }
+              
+              drawBox(ctx, det, x1, y1, x2, y2, scaleX, scaleY, opacity);
+          });
+          
+          // Draw new objects in nextFrame that started appearing (Fade In)
+          nextFrame.detections.forEach(det => {
+             const match = prevFrame.detections.find(d => d.id === det.id);
+             if (!match) {
+                 // It's a new object, fade in
+                 const opacity = timeRatio;
+                 drawBox(ctx, det, det.bbox[0], det.bbox[1], det.bbox[2], det.bbox[3], scaleX, scaleY, opacity);
+             }
+          });
+
+      } else if (prevFrame && prevFrame.detections) {
+          // Static last frame or no next frame (end of video)
+          // Fade out if too far from frame time (e.g. > 1s)
+          const age = currentTime - prevFrame.time;
+          const opacity = Math.max(0, 1.0 - age); // Fade out over 1 second
+          
+          if (opacity > 0) {
+              prevFrame.detections.forEach(det => {
+                  drawBox(ctx, det, det.bbox[0], det.bbox[1], det.bbox[2], det.bbox[3], scaleX, scaleY, opacity);
+              });
+          }
+      }
+  };
+
+  const drawBox = (ctx, det, x1, y1, x2, y2, scaleX, scaleY, opacity) => {
+      const bx = x1 * scaleX;
+      const by = y1 * scaleY;
+      const bw = (x2 - x1) * scaleX;
+      const bh = (y2 - y1) * scaleY;
+
+      ctx.globalAlpha = opacity;
+      
+      // Draw box
+      ctx.strokeStyle = '#00bcd4';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx, by, bw, bh);
+
+      // Draw label
+      ctx.fillStyle = 'rgba(0, 188, 212, 0.8)';
+      ctx.fillRect(bx, by - 20, ctx.measureText(det.class_name).width + 10, 20);
+      ctx.fillStyle = '#000';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(`${det.class_name} ${(det.confidence * 100).toFixed(0)}%`, bx + 5, by - 5);
+      
+      ctx.globalAlpha = 1.0;
+  };
 
   // Listen for progress and stream
   React.useEffect(() => {
@@ -50,6 +269,9 @@ const Testing = () => {
     
     // Handle real-time data from video
     const handleData = (data) => {
+        // Prevent late updates from overwriting final result
+        if (!isRunningRef.current) return;
+
         console.log("Received video data:", data); // Debug output
         
         // data = { type: "video_frame", timestamp: float, stats: {class: count}, total: int }
@@ -83,12 +305,14 @@ const Testing = () => {
             // Append new row to history (Newest First)
             setResults(prev => [summaryRow, ...prev]);
             
-            setCurrentResult(prev => ({
-                ...prev,
+            // Update Detailed Results Panel in Real-time
+            setCurrentResult({
+                time: data.timestamp.toFixed(1), // Show current timestamp instead of total time
                 count: data.total,
                 topClass: topClass,
-                topConf: 0 // Not applicable for summary
-            }));
+                topConf: maxCount > 0 ? 1.0 : 0, // Confidence for video is just binary detected/empty for summary
+                box: [] // Video doesn't have single ROI
+            });
 
         } else if (data.summary) {
             // Legacy format fallback (if backend not updated)
@@ -104,64 +328,27 @@ const Testing = () => {
     };
   }, []);
 
+  // Load Model List
+  React.useEffect(() => {
+      const loadModels = async () => {
+          try {
+              const models = await window.electronAPI.getModelList();
+              if (models && models.length > 0) {
+                  setModelList(models);
+                  setSelectedModel(models[0].path);
+              }
+          } catch (e) {
+              console.error("Failed to load models:", e);
+          }
+      };
+      loadModels();
+  }, []);
+
   // Handle video time update to draw boxes
+  // Replaced by requestAnimationFrame loop
+  // But we might need to keep it for manual seek updates if animation loop is paused
   const handleTimeUpdate = () => {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas || !framesData.length) return;
-
-      const ctx = canvas.getContext('2d');
-      // Match canvas size to video display size
-      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
-          canvas.width = video.clientWidth;
-          canvas.height = video.clientHeight;
-      }
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      const currentTime = video.currentTime;
-      // Find closest frame data (within 1s as we sampled at 1fps)
-      // Since we sample 1fps, time will be 0.0, 1.0, 2.0...
-      // We can just round currentTime or find closest.
-      
-      // Optimization: framesData is sorted by time.
-      // Find the frame with time <= currentTime and time > currentTime - 1.0
-      // Or simply: find closest time.
-      
-      const frame = framesData.find(f => Math.abs(f.time - currentTime) < 0.6); // 0.6 tolerance for 1fps
-
-      if (frame && frame.detections) {
-          // Scale factor
-          // Detection boxes are likely normalized or based on original resolution.
-          // The python script returns [x1, y1, x2, y2] in original resolution (imgsz=640 resized internally but mapped back? No, YOLO returns original usually unless resized manually)
-          // Wait, predict_interface.py uses model.track() with imgsz=640.
-          // The bbox returned by YOLO is usually scaled to the ORIGINAL image size provided to predict().
-          // So we need video.videoWidth and video.videoHeight.
-          
-          const scaleX = canvas.width / video.videoWidth;
-          const scaleY = canvas.height / video.videoHeight;
-
-          frame.detections.forEach(det => {
-              const [x1, y1, x2, y2] = det.bbox;
-              
-              const bx = x1 * scaleX;
-              const by = y1 * scaleY;
-              const bw = (x2 - x1) * scaleX;
-              const bh = (y2 - y1) * scaleY;
-
-              // Draw box
-              ctx.strokeStyle = '#00bcd4';
-              ctx.lineWidth = 2;
-              ctx.strokeRect(bx, by, bw, bh);
-
-              // Draw label
-              ctx.fillStyle = 'rgba(0, 188, 212, 0.8)';
-              ctx.fillRect(bx, by - 20, ctx.measureText(det.class_name).width + 10, 20);
-              ctx.fillStyle = '#000';
-              ctx.font = '12px sans-serif';
-              ctx.fillText(`${det.class_name} ${(det.confidence * 100).toFixed(0)}%`, bx + 5, by - 5);
-          });
-      }
+     // Do nothing, let animation loop handle it
   };
 
   // Handlers
@@ -177,9 +364,11 @@ const Testing = () => {
       setFramesData([]);
       setIsVideo(false);
       
+      const fpsValue = useNativeFps ? -1 : fps;
       // Call inference
-      const result = await window.electronAPI.runInference(filePath);
+      const result = await window.electronAPI.runInference(filePath, { fps: fpsValue, quality, modelPath: selectedModel });
       
+      isRunningRef.current = false; // Stop accepting stream updates
       setLoading(false);
       setProgress(0);
 
@@ -245,6 +434,7 @@ const Testing = () => {
 
       setLoading(true);
       setProgress(0);
+      isRunningRef.current = true; // Mark as running
       
       // Set preview immediately for video
       const videoUrl = `file://${filePath.replace(/\\/g, '/')}`;
@@ -253,8 +443,10 @@ const Testing = () => {
       setFramesData([]);
       setResults([]); // Clear previous results
 
-      const result = await window.electronAPI.runInference(filePath);
+      const fpsValue = useNativeFps ? -1 : fps;
+      const result = await window.electronAPI.runInference(filePath, { fps: fpsValue, quality, modelPath: selectedModel });
       
+      isRunningRef.current = false; // Stop accepting stream updates
       setLoading(false);
       setProgress(0);
 
@@ -265,7 +457,9 @@ const Testing = () => {
       }
 
       if (result.is_video && result.frames_data) {
-         setFramesData(result.frames_data);
+         // Process tracks for smoothness
+         const smoothFrames = processTracks(result.frames_data);
+         setFramesData(smoothFrames);
          
          // For video, we DO NOT add a row to the table because it confuses the user (looks like invalid detection).
          // The video results are visualized in real-time on the video player.
@@ -275,7 +469,7 @@ const Testing = () => {
             time: result.inference_time,
             count: result.object_count, // Total detections across frames
             topClass: result.top_class,
-            topConf: 0,
+            topConf: result.object_count > 0 ? 1.0 : 0, // Show valid confidence if objects found
             box: [] // Video doesn't have a single ROI
          });
       }
@@ -451,6 +645,24 @@ const Testing = () => {
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>Input Source</Typography>
+              
+              {/* Model Selection */}
+              <FormControl fullWidth sx={{ mb: 3 }} size="small">
+                <InputLabel id="model-select-label">Select Model</InputLabel>
+                <Select
+                  labelId="model-select-label"
+                  value={selectedModel}
+                  label="Select Model"
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                >
+                  {modelList.map((model, idx) => (
+                    <MenuItem key={idx} value={model.path}>
+                      {model.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
               <Stack spacing={2}>
                 <Button 
                   variant="outlined" 
@@ -489,6 +701,71 @@ const Testing = () => {
                   Batch Folder
                 </Button>
               </Stack>
+            </CardContent>
+          </Card>
+
+          {/* Settings */}
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <SettingsIcon /> Inference Settings
+              </Typography>
+              
+              <Box sx={{ mb: 2 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Typography gutterBottom variant="caption" color="text.secondary">
+                          Video Frame Rate (FPS): {useNativeFps ? "Max (Native)" : fps}
+                      </Typography>
+                      <FormControlLabel
+                          control={
+                              <Switch 
+                                  size="small" 
+                                  checked={useNativeFps} 
+                                  onChange={(e) => setUseNativeFps(e.target.checked)} 
+                              />
+                          }
+                          label={<Typography variant="caption">Native FPS</Typography>}
+                      />
+                  </Box>
+                  <Slider
+                      value={fps}
+                      onChange={(e, v) => setFps(v)}
+                      min={1}
+                      max={30}
+                      step={1}
+                      disabled={useNativeFps}
+                      marks={[
+                          { value: 1, label: '1' },
+                          { value: 15, label: '15' },
+                          { value: 30, label: '30' },
+                      ]}
+                      valueLabelDisplay="auto"
+                  />
+              </Box>
+
+              <Box>
+                  <Typography gutterBottom variant="caption" color="text.secondary">
+                      Detection Quality (Resolution & Precision)
+                  </Typography>
+                  <ToggleButtonGroup
+                      value={quality}
+                      exclusive
+                      onChange={(e, v) => v && setQuality(v)}
+                      fullWidth
+                      size="small"
+                      color="primary"
+                  >
+                      <ToggleButton value="low">Low</ToggleButton>
+                      <ToggleButton value="medium">Med</ToggleButton>
+                      <ToggleButton value="high">High</ToggleButton>
+                      <ToggleButton value="max" sx={{ fontWeight: 'bold', color: 'secondary.main' }}>Max</ToggleButton>
+                  </ToggleButtonGroup>
+                  {quality === 'max' && (
+                      <Typography variant="caption" color="secondary" sx={{ display: 'block', mt: 1, fontStyle: 'italic' }}>
+                          * Max Quality enables TTA (Test Time Augmentation) and high resolution. It will be significantly slower but more accurate.
+                      </Typography>
+                  )}
+              </Box>
             </CardContent>
           </Card>
 

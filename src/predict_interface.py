@@ -20,8 +20,18 @@ try:
 except ImportError:
     pass
 
-def run_inference(source_path, model_path, conf_thres=0.25, augment=False):
+def run_inference(source_path, model_path, conf_thres=0.25, augment=False, target_fps=1, quality='medium'):
     try:
+        # Determine settings based on quality
+        imgsz = 640
+        if quality == 'low':
+            imgsz = 320
+        elif quality == 'high':
+            imgsz = 1280
+        elif quality == 'max':
+            imgsz = 1280 # Max resolution
+            augment = True # Force augment if not already passed (though main.js passes it too)
+            
         # Check if file exists
         if not os.path.exists(source_path):
             return {"error": f"File not found: {source_path}"}
@@ -104,9 +114,13 @@ def run_inference(source_path, model_path, conf_thres=0.25, augment=False):
             detections_summary = {} # class -> count
             frames_data = [] # Store per-frame detection data
             
-            # Reduce frame rate: 1 frame per second
-            frame_interval = int(fps)
-            if frame_interval < 1: frame_interval = 1
+            # Reduce frame rate based on target_fps
+            # If target_fps is <= 0 (e.g. -1), use frame_interval = 1 (Native FPS)
+            if target_fps <= 0:
+                frame_interval = 1
+            else:
+                frame_interval = int(fps / target_fps)
+                if frame_interval < 1: frame_interval = 1
 
             while cap.isOpened():
                 ret, frame = cap.read()
@@ -122,11 +136,11 @@ def run_inference(source_path, model_path, conf_thres=0.25, augment=False):
                 try:
                     # Use predict() instead of track() for performance on video stream
                     # Tracking is computationally expensive and not strictly necessary for simple counting
-                    results = model.predict(frame, conf=0.25, imgsz=640, verbose=False, device=device)
+                    results = model.predict(frame, conf=0.25, imgsz=imgsz, verbose=False, device=device)
                 except Exception as e:
                     if frame_count == 0:
                         print(f"Warning: Inference failed ({str(e)}), retrying.", file=sys.stderr)
-                    results = model.predict(frame, conf=0.25, imgsz=640, verbose=False, device=device)
+                    results = model.predict(frame, conf=0.25, imgsz=imgsz, verbose=False, device=device)
                 
                 result = results[0]
                 
@@ -323,6 +337,8 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='runs/detect/train_v8n/weights/best.pt', help='Path to model file')
     parser.add_argument('--conf', type=float, default=0.25, help='Confidence threshold')
     parser.add_argument('--augment', action='store_true', help='Enable Test-Time Augmentation (TTA)')
+    parser.add_argument('--target_fps', type=int, default=1, help='Target FPS for video processing. Set to -1 for native FPS.')
+    parser.add_argument('--quality', type=str, default='medium', choices=['low', 'medium', 'high', 'max'], help='Inference quality')
     args = parser.parse_args()
 
     # Global model loading to avoid reloading on every call
@@ -339,7 +355,7 @@ if __name__ == "__main__":
     except ImportError:
         SAHI_AVAILABLE = False
 
-    result = run_inference(args.source, args.model, args.conf, augment=args.augment)
+    result = run_inference(args.source, args.model, args.conf, augment=args.augment, target_fps=args.target_fps, quality=args.quality)
     
     print("__JSON_START__")
     print(json.dumps(result))

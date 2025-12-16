@@ -108,7 +108,7 @@ function App() {
   
   // Training State
   const [isTraining, setIsTraining] = useState(false);
-  const [epochs, setEpochs] = useState(50);
+  const [epochs, setEpochs] = useState(150);
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);

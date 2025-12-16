@@ -11,7 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Testing / Inference API
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
   openVideoDialog: () => ipcRenderer.invoke('dialog:openVideo'),
-  runInference: (path) => ipcRenderer.invoke('run:inference', path),
+  getModelList: () => ipcRenderer.invoke('get-model-list'),
+  runInference: (path, options) => ipcRenderer.invoke('run:inference', path, options),
   onInferenceProgress: (callback) => ipcRenderer.on('inference-progress', (event, progress) => callback(progress)),
   onInferenceStream: (callback) => ipcRenderer.on('inference-stream', (event, frame) => callback(frame)),
   onInferenceData: (callback) => ipcRenderer.on('inference-data', (event, data) => callback(data)),

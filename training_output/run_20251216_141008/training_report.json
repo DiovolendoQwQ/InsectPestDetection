@@ -1,0 +1,16 @@
+{
+    "timestamp": "20251216_141008",
+    "config": {
+        "epochs": 150,
+        "batch": 16,
+        "data": "data/data.yaml",
+        "base_model": "yolov8s.pt"
+    },
+    "metrics": {
+        "mAP_0.5": 0.9830545037113237,
+        "mAP_0.5_0.95": 0.8943862110015558,
+        "precision": 0.9793482040262317,
+        "recall": 0.9708627962281623
+    },
+    "training_args": "N/A"
+}

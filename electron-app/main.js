@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const si = require('systeminformation');
+const glob = require('glob');
 require('dotenv').config();
 
 // Suppress security warnings in development
@@ -198,8 +199,89 @@ ipcMain.handle('dialog:openVideo', async () => {
   }
 });
 
-ipcMain.handle('run:inference', async (event, filePath) => {
-  return new Promise((resolve, reject) => {
+ipcMain.handle('get-model-list', async () => {
+  const projectRoot = path.resolve(__dirname, '..');
+  const models = [];
+
+  const globPromise = (pattern) => {
+      return new Promise((resolve) => {
+          glob(pattern, (err, files) => {
+              if (err) {
+                  console.error("Error scanning:", pattern, err);
+                  resolve([]);
+              } else {
+                  resolve(files);
+              }
+          });
+      });
+  };
+
+  const runsPath = path.join(projectRoot, 'runs/detect/**/weights/best.pt').replace(/\\/g, '/');
+  const trainingPath = path.join(projectRoot, 'training_output/**/weights/best.pt').replace(/\\/g, '/');
+  const rootPath = path.join(projectRoot, '*.pt').replace(/\\/g, '/');
+
+  try {
+      const [runsFiles, trainingFiles, rootFiles] = await Promise.all([
+          globPromise(runsPath),
+          globPromise(trainingPath),
+          globPromise(rootPath)
+      ]);
+
+      // 1. Process runs/detect
+      runsFiles.forEach(file => {
+          const parts = file.split('/');
+          const weightsIndex = parts.indexOf('weights');
+          let runName = 'Unknown Run';
+          if (weightsIndex > 0) {
+              runName = parts[weightsIndex - 1];
+          }
+          models.push({
+              name: `Runs: ${runName} (best.pt)`,
+              path: path.resolve(file)
+          });
+      });
+
+      // 2. Process training_output
+      trainingFiles.forEach(file => {
+          // Format: .../training_output/<run_id>/yolo_logs/train/weights/best.pt
+          const parts = file.split('/');
+          const outputIndex = parts.indexOf('training_output');
+          let runName = 'Training Run';
+          
+          if (outputIndex >= 0 && parts.length > outputIndex + 1) {
+              runName = parts[outputIndex + 1]; // e.g., run_20251216_...
+          }
+          
+          models.push({
+              name: `New: ${runName} (best.pt)`,
+              path: path.resolve(file)
+          });
+      });
+
+      // 3. Process root files
+      rootFiles.forEach(file => {
+          models.unshift({
+              name: path.basename(file),
+              path: path.resolve(file)
+          });
+      });
+
+      // 4. Manually add yolov8s.pt
+      models.unshift({
+          name: "yolov8s.pt (Higher Accuracy)",
+          path: "yolov8s.pt" 
+      });
+
+      return models;
+
+  } catch (error) {
+      console.error("Error in get-model-list:", error);
+      return [];
+  }
+});
+
+ipcMain.handle('run:inference', async (event, filePath, options = {}) => {
+  return new Promise((resolve) => {
     let pythonPath = process.env.PYTHON_PATH || 'python';
     // If fallback logic is needed, check default paths or 'python'
     if (pythonPath.includes('D:\\Anaconda')) pythonPath = 'python';
@@ -209,8 +291,25 @@ ipcMain.handle('run:inference', async (event, filePath) => {
     
     // Command args
     const args = [scriptPath, '--source', filePath];
+    
+    if (options.modelPath) {
+        args.push('--model', options.modelPath);
+    }
 
-    console.log(`Starting inference on: ${filePath}`);
+    if (options.fps) {
+        args.push('--target_fps', options.fps.toString());
+    }
+    
+    if (options.quality) {
+        if (options.quality === 'max') {
+            args.push('--quality', 'max');
+            args.push('--augment'); // Enable TTA
+        } else {
+            args.push('--quality', options.quality);
+        }
+    }
+
+    console.log(`Starting inference on: ${filePath} with options:`, options);
 
     const child = spawn(pythonPath, args, {
       cwd: projectRoot,
