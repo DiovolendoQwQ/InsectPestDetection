@@ -3,7 +3,10 @@ const path = require('path');
 const { spawn } = require('child_process');
 const si = require('systeminformation');
 const glob = require('glob');
+const Store = require('electron-store');
 require('dotenv').config();
+
+const store = new Store();
 
 // Suppress security warnings in development
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true';
@@ -104,15 +107,33 @@ ipcMain.handle('get-dynamic-stats', async () => {
   }
 });
 
+// Settings Handlers
+ipcMain.handle('get-settings', async () => {
+    return store.store;
+});
+
+ipcMain.handle('save-settings', async (event, settings) => {
+    store.set(settings);
+    return true;
+});
+
 // 2. Run Python Script (Training)
 let pythonProcess = null;
 
 ipcMain.on('start-training', (event, args) => {
   let { pythonPath, scriptPath, params } = args;
 
-  // If pythonPath is not provided or hardcoded fallback was used in frontend, use env var
+  // 1. Check if pythonPath is passed in args (from frontend override)
+  // 2. Check if pythonPath is in settings (electron-store)
+  // 3. Fallback to process.env.PYTHON_PATH or 'python'
+  
   if (!pythonPath || pythonPath.includes('D:\\Anaconda')) {
-      pythonPath = process.env.PYTHON_PATH || 'python';
+      const settingsPython = store.get('pythonPath');
+      if (settingsPython && settingsPython.trim() !== '') {
+          pythonPath = settingsPython;
+      } else {
+          pythonPath = process.env.PYTHON_PATH || 'python';
+      }
   }
 
   // Construct arguments
@@ -199,6 +220,133 @@ ipcMain.handle('dialog:openVideo', async () => {
   }
 });
 
+ipcMain.handle('dialog:openDirectory', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openDirectory']
+  });
+  if (canceled) {
+    return null;
+  } else {
+    return filePaths[0];
+  }
+});
+
+ipcMain.handle('run:batch-inference', async (event, folderPath, options = {}) => {
+  return new Promise((resolve) => {
+    let pythonPath = process.env.PYTHON_PATH || 'python';
+    
+    // Check settings first
+    const settingsPython = store.get('pythonPath');
+    if (settingsPython && settingsPython.trim() !== '') {
+        pythonPath = settingsPython;
+    } else if (pythonPath.includes('D:\\Anaconda')) {
+        pythonPath = 'python';
+    }
+
+    const scriptPath = 'src/batch_predict.py';
+    const projectRoot = path.resolve(__dirname, '..');
+    
+    const args = [scriptPath, '--source_dir', folderPath];
+    if (options.modelPath) {
+        args.push('--model', options.modelPath);
+    }
+    
+    console.log(`Starting batch inference on: ${folderPath}`);
+
+    const child = spawn(pythonPath, args, {
+      cwd: projectRoot,
+      env: { ...process.env, PYTHONUNBUFFERED: '1' }
+    });
+
+    let stdoutData = '';
+    let stderrData = '';
+
+    child.stdout.on('data', (data) => {
+      const chunk = data.toString();
+      stdoutData += chunk;
+    });
+
+    child.stderr.on('data', (data) => {
+      const output = data.toString();
+      stderrData += output;
+      console.log(`Batch Stderr: ${output}`);
+      
+      const match = output.match(/PROGRESS:(\d+)/);
+      if (match) {
+        const progress = parseInt(match[1]);
+        event.sender.send('inference-progress', progress);
+      }
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        console.error(`Batch inference failed with code ${code}`);
+        resolve({ error: `Process exited with code ${code}`, details: stderrData });
+        return;
+      }
+
+      try {
+        const startMarker = "__JSON_START__";
+        const endMarker = "__JSON_END__";
+        
+        const startIndex = stdoutData.indexOf(startMarker);
+        const endIndex = stdoutData.indexOf(endMarker);
+
+        if (startIndex !== -1 && endIndex !== -1) {
+            const jsonStr = stdoutData.substring(startIndex + startMarker.length, endIndex).trim();
+            const result = JSON.parse(jsonStr);
+            resolve(result);
+        } else {
+            console.error("Could not find JSON markers in output");
+            resolve({ error: "Invalid output format from batch script", raw: stdoutData });
+        }
+      } catch (e) {
+        console.error("Failed to parse batch result:", e);
+        resolve({ error: "Failed to parse result", details: e.message });
+      }
+    });
+  });
+});
+
+ipcMain.handle('run:live-camera', async (event, options = {}) => {
+  return new Promise((resolve) => {
+    let pythonPath = process.env.PYTHON_PATH || 'python';
+    
+    // Check settings first
+    const settingsPython = store.get('pythonPath');
+    if (settingsPython && settingsPython.trim() !== '') {
+        pythonPath = settingsPython;
+    } else if (pythonPath.includes('D:\\Anaconda')) {
+        pythonPath = 'python';
+    }
+
+    const scriptPath = 'src/live_camera.py';
+    const projectRoot = path.resolve(__dirname, '..');
+    
+    const args = [scriptPath];
+    if (options.modelPath) {
+        args.push('--model', options.modelPath);
+    }
+    
+    console.log(`Starting live camera with model: ${options.modelPath}`);
+
+    const child = spawn(pythonPath, args, {
+      cwd: projectRoot,
+      env: { ...process.env, PYTHONUNBUFFERED: '1' }
+    });
+
+    // We don't need to capture much stdout/stderr for the UI since it's a native window,
+    // but logging is good for debugging.
+    child.stdout.on('data', (data) => console.log(`Camera stdout: ${data}`));
+    child.stderr.on('data', (data) => console.log(`Camera stderr: ${data}`));
+
+    child.on('close', (code) => {
+      console.log(`Camera process exited with code ${code}`);
+      resolve({ success: code === 0 });
+    });
+  });
+});
+
 ipcMain.handle('get-model-list', async () => {
   const projectRoot = path.resolve(__dirname, '..');
   const models = [];
@@ -283,8 +431,14 @@ ipcMain.handle('get-model-list', async () => {
 ipcMain.handle('run:inference', async (event, filePath, options = {}) => {
   return new Promise((resolve) => {
     let pythonPath = process.env.PYTHON_PATH || 'python';
-    // If fallback logic is needed, check default paths or 'python'
-    if (pythonPath.includes('D:\\Anaconda')) pythonPath = 'python';
+    
+    // Check settings first
+    const settingsPython = store.get('pythonPath');
+    if (settingsPython && settingsPython.trim() !== '') {
+        pythonPath = settingsPython;
+    } else if (pythonPath.includes('D:\\Anaconda')) {
+        pythonPath = 'python';
+    }
 
     const scriptPath = 'src/predict_interface.py';
     const projectRoot = path.resolve(__dirname, '..');

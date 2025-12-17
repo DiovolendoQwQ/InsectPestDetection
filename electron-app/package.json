@@ -19,6 +19,7 @@
     "dotenv": "^17.2.3",
     "electron": "^39.2.7",
     "electron-builder": "^26.0.12",
+    "electron-store": "^8.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "recharts": "^3.5.1",

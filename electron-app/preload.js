@@ -8,11 +8,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTrainingLog: (callback) => ipcRenderer.on('training-log', (event, value) => callback(value)),
   onTrainingFinished: (callback) => ipcRenderer.on('training-finished', (event, code) => callback(code)),
   removeLogListener: () => ipcRenderer.removeAllListeners('training-log'),
+  // Settings API
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  
   // Testing / Inference API
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
   openVideoDialog: () => ipcRenderer.invoke('dialog:openVideo'),
+  openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
   getModelList: () => ipcRenderer.invoke('get-model-list'),
   runInference: (path, options) => ipcRenderer.invoke('run:inference', path, options),
+  runBatchInference: (path, options) => ipcRenderer.invoke('run:batch-inference', path, options),
+  openCamera: (options) => ipcRenderer.invoke('run:live-camera', options),
   onInferenceProgress: (callback) => ipcRenderer.on('inference-progress', (event, progress) => callback(progress)),
   onInferenceStream: (callback) => ipcRenderer.on('inference-stream', (event, frame) => callback(frame)),
   onInferenceData: (callback) => ipcRenderer.on('inference-data', (event, data) => callback(data)),

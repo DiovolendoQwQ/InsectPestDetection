@@ -48,6 +48,8 @@ import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
 import Testing from './components/Testing/Testing';
+import PerformanceChart from './components/Dashboard/PerformanceChart';
+import Settings from './components/Settings/Settings';
 
 const drawerWidth = 260;
 
@@ -105,6 +107,7 @@ function App() {
     memTotal: 0,
     gpu: null
   });
+  const [statsHistory, setStatsHistory] = useState([]); // Array of { time, cpu, memory, gpu }
   
   // Training State
   const [isTraining, setIsTraining] = useState(false);
@@ -132,10 +135,31 @@ function App() {
       const s = await window.electronAPI.getDynamicStats();
       if (s) {
         setStats(prev => ({ ...prev, ...s }));
+        
+        // Update History
+        setStatsHistory(prev => {
+            const now = new Date();
+            const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+            
+            const newPoint = {
+                time: timeStr,
+                cpu: parseFloat(s.cpuLoad.toFixed(1)),
+                memory: parseFloat(((s.memUsed / stats.memTotal) * 100).toFixed(1)),
+                gpu: null // Placeholder, GPU dynamic load not fully implemented yet in backend
+            };
+            
+            // Keep last 60 points (60 seconds if interval is 1000ms, here it is 2000ms so 120s)
+            // User requested 1 update per sec, currently interval is 2000. Let's change interval to 1000.
+            const newHistory = [...prev, newPoint];
+            if (newHistory.length > 60) {
+                newHistory.shift();
+            }
+            return newHistory;
+        });
       }
-    }, 2000);
+    }, 1000); // Updated to 1 second
     return () => clearInterval(interval);
-  }, [activeTab]);
+  }, [activeTab, stats.memTotal]); // Added memTotal dependency
 
   // Terminal Component defined outside App to prevent re-creation
   const TerminalView = ({ onInit, onDispose }) => {
@@ -498,14 +522,12 @@ function App() {
                 {/* Placeholder for Charts */}
                 <Grid size={{ xs: 12 }}>
                   <Card sx={{ 
-                    p: 3, 
                     height: { xs: 300, md: 400, lg: 500 }, 
                     display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center', 
+                    flexDirection: 'column',
                     bgcolor: 'rgba(255,255,255,0.02)' 
                   }}>
-                    <Typography color="textSecondary">Real-time Performance Charts (Coming Soon)</Typography>
+                    <PerformanceChart data={statsHistory} />
                   </Card>
                 </Grid>
               </Grid>
@@ -639,14 +661,8 @@ function App() {
           {/* TESTING */}
           {activeTab === 'testing' && <Testing />}
           
-          {/* PLACEHOLDERS */}
-          {activeTab === 'settings' && (
-             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mt: 10, opacity: 0.5 }}>
-               <SettingsIcon sx={{ fontSize: 60, mb: 2 }} />
-               <Typography variant="h5">Settings Module</Typography>
-               <Typography>This feature will be available in the next update.</Typography>
-             </Box>
-          )}
+          {/* SETTINGS */}
+          {activeTab === 'settings' && <Settings />}
 
         </Box>
       </Box>

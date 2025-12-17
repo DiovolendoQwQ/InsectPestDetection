@@ -480,6 +480,64 @@ const Testing = () => {
     }
   };
 
+  const handleSelectBatchFolder = async () => {
+    try {
+        const folderPath = await window.electronAPI.openDirectoryDialog();
+        if (!folderPath) return;
+
+        setLoading(true);
+        setProgress(0);
+        setResults([]);
+        setPreviewSrc(null); // Or set a placeholder
+        setCurrentResult(null);
+
+        // Call batch inference
+        const result = await window.electronAPI.runBatchInference(folderPath, { modelPath: selectedModel });
+
+        setLoading(false);
+        setProgress(0);
+
+        if (result.error) {
+            console.error("Batch Inference Error:", result.error);
+            alert(`Error: ${result.error}`);
+            return;
+        }
+
+        if (result.success) {
+            alert(`Batch processing complete!\n\nProcessed: ${result.processed_count} images\nOutput Directory: ${result.output_dir}\nCSV Report: ${result.csv_path}`);
+            
+            // Add a summary row to the table
+            const summaryRow = {
+                path: "Batch Summary",
+                class: "Multiple",
+                confidence: 1.0,
+                box: [`${result.processed_count} files`],
+                isSummary: true
+            };
+            setResults([summaryRow]);
+        }
+
+    } catch (error) {
+        console.error("Batch Handler Error:", error);
+        setLoading(false);
+    }
+  };
+
+  const handleOpenCamera = async () => {
+    try {
+        // Just trigger the backend to spawn the python process
+        // No loading state needed in UI really, as it opens a separate window
+        // But we can show a quick toast or log
+        console.log("Opening camera...");
+        
+        await window.electronAPI.openCamera({ modelPath: selectedModel });
+        
+    } catch (error) {
+        console.error("Camera Error:", error);
+        alert("Failed to open camera: " + error.message);
+    }
+  };
+
   return (
     <Box sx={{ 
       height: { xs: 'auto', md: 'calc(100vh - 100px)' }, 
@@ -686,7 +744,7 @@ const Testing = () => {
                   variant="outlined" 
                   startIcon={<CameraIcon />} 
                   fullWidth
-                  disabled // Placeholder
+                  onClick={handleOpenCamera}
                   sx={{ justifyContent: 'flex-start', py: 1.5 }}
                 >
                   Open Camera
@@ -695,7 +753,7 @@ const Testing = () => {
                   variant="outlined" 
                   startIcon={<FolderIcon />} 
                   fullWidth
-                  disabled // Placeholder
+                  onClick={handleSelectBatchFolder}
                   sx={{ justifyContent: 'flex-start', py: 1.5 }}
                 >
                   Batch Folder
