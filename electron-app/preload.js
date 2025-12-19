@@ -20,8 +20,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runInference: (path, options) => ipcRenderer.invoke('run:inference', path, options),
   runBatchInference: (path, options) => ipcRenderer.invoke('run:batch-inference', path, options),
   openCamera: (options) => ipcRenderer.invoke('run:live-camera', options),
+  stopInference: () => ipcRenderer.send('stop-inference'),
+  updateConfidence: (conf) => ipcRenderer.send('update-confidence', conf),
   onInferenceProgress: (callback) => ipcRenderer.on('inference-progress', (event, progress) => callback(progress)),
   onInferenceStream: (callback) => ipcRenderer.on('inference-stream', (event, frame) => callback(frame)),
+  onCameraReady: (callback) => ipcRenderer.on('camera-ready', (event) => callback()),
   onInferenceData: (callback) => ipcRenderer.on('inference-data', (event, data) => callback(data)),
   removeProgressListeners: () => {
       ipcRenderer.removeAllListeners('inference-progress');

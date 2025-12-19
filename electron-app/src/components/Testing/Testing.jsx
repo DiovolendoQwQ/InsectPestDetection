@@ -54,6 +54,8 @@ const Testing = () => {
   const [quality, setQuality] = useState('medium');
   const [modelList, setModelList] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.50); // New state for confidence
+  const [isCameraLoading, setIsCameraLoading] = useState(false); // New state for camera loading
   const videoRef = React.useRef(null);
   const canvasRef = React.useRef(null);
   const requestRef = React.useRef();
@@ -143,6 +145,14 @@ const Testing = () => {
       requestRef.current = requestAnimationFrame(animate);
       return () => cancelAnimationFrame(requestRef.current);
   }, [framesData, isVideo]); // Re-bind when data changes
+
+  const handleConfidenceChange = (event, newValue) => {
+      setConfidenceThreshold(newValue);
+      // Send real-time update to backend if camera is running
+      if (isRunningRef.current) {
+          window.electronAPI.updateConfidence(newValue);
+      }
+  };
 
   const drawFrame = () => {
       const video = videoRef.current;
@@ -322,6 +332,16 @@ const Testing = () => {
 
     window.electronAPI.onInferenceProgress(handleProgress);
     window.electronAPI.onInferenceData(handleData);
+    window.electronAPI.onInferenceStream((frame) => {
+        if (isRunningRef.current) {
+            setPreviewSrc(frame);
+        }
+    });
+
+    // Listen for camera ready signal
+    window.electronAPI.onCameraReady(() => {
+        setIsCameraLoading(false);
+    });
     
     return () => {
         window.electronAPI.removeProgressListeners();
@@ -354,6 +374,9 @@ const Testing = () => {
   // Handlers
   const handleSelectImage = async () => {
     try {
+      // Stop any running inference
+      window.electronAPI.stopInference();
+      
       const filePath = await window.electronAPI.openFileDialog();
       if (!filePath) return;
 
@@ -429,6 +452,9 @@ const Testing = () => {
 
   const handleSelectVideo = async () => {
     try {
+      // Stop any running inference
+      window.electronAPI.stopInference();
+
       const filePath = await window.electronAPI.openVideoDialog();
       if (!filePath) return;
 
@@ -482,6 +508,9 @@ const Testing = () => {
 
   const handleSelectBatchFolder = async () => {
     try {
+        // Stop any running inference
+        window.electronAPI.stopInference();
+
         const folderPath = await window.electronAPI.openDirectoryDialog();
         if (!folderPath) return;
 
@@ -525,23 +554,41 @@ const Testing = () => {
 
   const handleOpenCamera = async () => {
     try {
-        // Just trigger the backend to spawn the python process
-        // No loading state needed in UI really, as it opens a separate window
-        // But we can show a quick toast or log
         console.log("Opening camera...");
         
-        await window.electronAPI.openCamera({ modelPath: selectedModel });
+        // Stop any running inference
+        window.electronAPI.stopInference();
+        
+        // Reset state for live stream
+        setLoading(false); // We don't want the loading spinner to block the view, or maybe we do initially?
+        // Actually, let's show loading until first frame comes? 
+        // But for now, let's just set isRunning to true and clear preview
+        
+        setPreviewSrc(null);
+        setIsVideo(false);
+        setResults([]);
+        setCurrentResult(null);
+        isRunningRef.current = true;
+        setIsCameraLoading(true); // Start loading
+
+        await window.electronAPI.openCamera({ modelPath: selectedModel, conf: confidenceThreshold });
+        
+        // When await returns, the camera process has closed
+        isRunningRef.current = false;
+        setIsCameraLoading(false); // Stop loading if process exits
         
     } catch (error) {
         console.error("Camera Error:", error);
         alert("Failed to open camera: " + error.message);
+        isRunningRef.current = false;
+        setIsCameraLoading(false); // Stop loading on error
     }
   };
 
   return (
     <Box sx={{ 
-      height: { xs: 'auto', md: 'calc(100vh - 100px)' }, 
-      minHeight: { xs: '100vh', md: 0 },
+      height: '100%', 
+      minHeight: '80vh',
       display: 'flex', 
       flexDirection: 'column',
       bgcolor: 'background.default',
@@ -742,12 +789,13 @@ const Testing = () => {
                 </Button>
                 <Button 
                   variant="outlined" 
-                  startIcon={<CameraIcon />} 
+                  startIcon={isCameraLoading ? <CircularProgress size={20} color="inherit" /> : <CameraIcon />} 
                   fullWidth
                   onClick={handleOpenCamera}
+                  disabled={isCameraLoading}
                   sx={{ justifyContent: 'flex-start', py: 1.5 }}
                 >
-                  Open Camera
+                  {isCameraLoading ? "Starting Camera..." : "Open Camera"}
                 </Button>
                 <Button 
                   variant="outlined" 
@@ -823,6 +871,25 @@ const Testing = () => {
                           * Max Quality enables TTA (Test Time Augmentation) and high resolution. It will be significantly slower but more accurate.
                       </Typography>
                   )}
+              </Box>
+              
+              <Box sx={{ mt: 3 }}>
+                  <Typography gutterBottom variant="caption" color="text.secondary">
+                      Camera Confidence Threshold: {confidenceThreshold}
+                  </Typography>
+                  <Slider
+                      value={confidenceThreshold}
+                      onChange={handleConfidenceChange}
+                      min={0.1}
+                      max={1.0}
+                      step={0.05}
+                      marks={[
+                          { value: 0.1, label: '0.1' },
+                          { value: 0.5, label: '0.5' },
+                          { value: 1.0, label: '1.0' },
+                      ]}
+                      valueLabelDisplay="auto"
+                  />
               </Box>
             </CardContent>
           </Card>

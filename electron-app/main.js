@@ -107,6 +107,13 @@ ipcMain.handle('get-dynamic-stats', async () => {
   }
 });
 
+ipcMain.on('update-confidence', (event, conf) => {
+    if (activeInferenceProcess && activeInferenceProcess.stdin) {
+        // console.log(`Sending updated confidence: ${conf}`);
+        activeInferenceProcess.stdin.write(`CONF:${conf}\n`);
+    }
+});
+
 // Settings Handlers
 ipcMain.handle('get-settings', async () => {
     return store.store;
@@ -119,6 +126,15 @@ ipcMain.handle('save-settings', async (event, settings) => {
 
 // 2. Run Python Script (Training)
 let pythonProcess = null;
+let activeInferenceProcess = null;
+
+ipcMain.on('stop-inference', () => {
+    if (activeInferenceProcess) {
+        console.log("Stopping active inference process...");
+        activeInferenceProcess.kill();
+        activeInferenceProcess = null;
+    }
+});
 
 ipcMain.on('start-training', (event, args) => {
   let { pythonPath, scriptPath, params } = args;
@@ -258,6 +274,8 @@ ipcMain.handle('run:batch-inference', async (event, folderPath, options = {}) =>
       env: { ...process.env, PYTHONUNBUFFERED: '1' }
     });
 
+    activeInferenceProcess = child;
+
     let stdoutData = '';
     let stderrData = '';
 
@@ -279,6 +297,9 @@ ipcMain.handle('run:batch-inference', async (event, folderPath, options = {}) =>
     });
 
     child.on('close', (code) => {
+      if (activeInferenceProcess === child) {
+          activeInferenceProcess = null;
+      }
       if (code !== 0) {
         console.error(`Batch inference failed with code ${code}`);
         resolve({ error: `Process exited with code ${code}`, details: stderrData });
@@ -327,21 +348,56 @@ ipcMain.handle('run:live-camera', async (event, options = {}) => {
     if (options.modelPath) {
         args.push('--model', options.modelPath);
     }
+    if (options.conf) {
+        args.push('--conf', options.conf.toString());
+    }
     
-    console.log(`Starting live camera with model: ${options.modelPath}`);
+    console.log(`Starting live camera with model: ${options.modelPath}, conf: ${options.conf}`);
+
+    // Kill any existing inference process
+    if (activeInferenceProcess) {
+        try {
+            activeInferenceProcess.kill();
+        } catch (e) {
+            console.error("Failed to kill existing process:", e);
+        }
+        activeInferenceProcess = null;
+    }
 
     const child = spawn(pythonPath, args, {
       cwd: projectRoot,
       env: { ...process.env, PYTHONUNBUFFERED: '1' }
     });
 
-    // We don't need to capture much stdout/stderr for the UI since it's a native window,
-    // but logging is good for debugging.
-    child.stdout.on('data', (data) => console.log(`Camera stdout: ${data}`));
+    activeInferenceProcess = child;
+
+    let stdoutBuffer = '';
+
+    child.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        stdoutBuffer += chunk;
+        
+        // Process buffered lines
+        let newlineIndex;
+        while ((newlineIndex = stdoutBuffer.indexOf('\n')) !== -1) {
+            const line = stdoutBuffer.slice(0, newlineIndex).trim();
+            stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+            
+            if (line.startsWith('STREAM_FRAME:')) {
+                const base64Data = line.substring('STREAM_FRAME:'.length);
+                event.sender.send('inference-stream', `data:image/jpeg;base64,${base64Data}`);
+                event.sender.send('camera-ready'); // Signal that camera is active
+            }
+        }
+    });
+
     child.stderr.on('data', (data) => console.log(`Camera stderr: ${data}`));
 
     child.on('close', (code) => {
       console.log(`Camera process exited with code ${code}`);
+      if (activeInferenceProcess === child) {
+          activeInferenceProcess = null;
+      }
       resolve({ success: code === 0 });
     });
   });
@@ -470,6 +526,8 @@ ipcMain.handle('run:inference', async (event, filePath, options = {}) => {
       env: { ...process.env, PYTHONUNBUFFERED: '1' }
     });
 
+    activeInferenceProcess = child;
+
     let stdoutData = '';
     let stderrData = '';
 
@@ -524,6 +582,9 @@ ipcMain.handle('run:inference', async (event, filePath, options = {}) => {
     });
 
     child.on('close', (code) => {
+      if (activeInferenceProcess === child) {
+          activeInferenceProcess = null;
+      }
       if (code !== 0) {
         console.error(`Inference failed with code ${code}`);
         // reject(new Error(`Process exited with code ${code}. Stderr: ${stderrData}`));
